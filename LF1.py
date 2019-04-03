@@ -6,6 +6,7 @@ import os
 import logging
 import json
 from botocore.vendored import requests 
+import boto3
 
 logger = logging.getLogger()
 logger.setLevel(logging.DEBUG)
@@ -101,6 +102,12 @@ def isvalid_time(time):
     if len(time) != 5:
         return False
     return True
+
+
+def isvalid_phone(phone):
+    if len(phone) == 10 and phone.isdigit():
+        return True
+    return False
     
 
 def build_validation_result(isvalid, violated_slot, message_content):
@@ -117,6 +124,7 @@ def validate_infor(slots):
     input_date = try_ex(lambda: slots['Date'])
     input_time = try_ex(lambda: slots['Time'])
     input_num = try_ex(lambda: slots['Num_people'])
+    input_phone = try_ex(lambda: slots['Phone'])
 
     if input_loc and not isvalid_city(input_loc):
         return build_validation_result(
@@ -153,7 +161,14 @@ def validate_infor(slots):
                 False, 
                 'Num_people', 
                 'I did not understand your input. How many people will go to the restaurant?')
-
+    
+    if input_phone:
+        if not isvalid_time(input_time):
+            return build_validation_result(
+                False, 
+                'Phone', 
+                'The input is not in the correct format, please enter again.')
+    
     return {'isValid': True}
 
 """ --- Yelp API function --- """
@@ -186,6 +201,7 @@ def dinning_suggest(intent_request):
     date = get_slots(intent_request)["Date"]
     dinning_time = get_slots(intent_request)["Time"]
     num_people = get_slots(intent_request)['Num_people']
+    phone = get_slots(intent_request)['Phone']
     
     if intent_request['invocationSource'] == 'DialogCodeHook':
         # Validate any slots which have been specified.  If any are invalid, re-elicit for their value
@@ -200,19 +216,49 @@ def dinning_suggest(intent_request):
                                validation_result['violatedSlot'],
                                validation_result['message'])
 
-        # Pass the price of the flowers back through session attributes to be used in various prompts defined
-        # on the bot model.
         output_session_attributes = intent_request['sessionAttributes'] if intent_request['sessionAttributes'] is not None else {}
          
         return delegate(output_session_attributes, intent_request['currentIntent']['slots'])
         
-    api_res = yelp_search(location.lower(), cusinie_type.lower(), date, dinning_time)
-    # Order the flowers, and rely on the goodbye message of the bot to define the message to the end user.
-    # In a real bot, this would likely involve a call to a backend service.
+    # api_res = yelp_search(location.lower(), cusinie_type.lower(), date, dinning_time)
+    
+    sqs = boto3.resource('sqs')
+    queue = sqs.get_queue_by_name(QueueName='hw2')
+    
+    msg = {
+        'Cuisine': {
+            'StringValue': cusinie_type,
+            'DataType': 'String'
+        },
+        'Num_people': {
+            'StringValue': num_people,
+            'DataType': 'String'
+        },
+        'Date': {
+            'StringValue': date,
+            'DataType': 'String'
+        },
+        'Time': {
+            'StringValue': dinning_time,
+            'DataType': 'String'
+        },
+        'Phone': {
+            'StringValue': phone,
+            'DataType': 'String'
+        }
+    }
+    
+    queue.send_message(MessageBody='message', MessageAttributes=msg)
+    """return close(intent_request['sessionAttributes'],
+                 'Fulfilled',
+                 {'contentType': 'PlainText',
+                  'content': 'Here are my {} restaurant suggestions for {} people, for {} at {}: {}. Enjoy your meal! I\'ll send to {}.'.format(cusinie_type, num_people, date, dinning_time, api_res, email)}
+                )"""
     return close(intent_request['sessionAttributes'],
                  'Fulfilled',
                  {'contentType': 'PlainText',
-                  'content': 'Here are my {} restaurant suggestions for {} people, for {} at {}: {}. Enjoy your meal!'.format(cusinie_type, num_people, date, dinning_time, api_res)}
+                  'content': 'You’re all set. Expect my recommendations shortly! Have a good day.'
+                  }
                 )
 
 
